@@ -110,55 +110,106 @@ export default function App() {
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
 
+  const handlePrint = (elementId: string) => {
+    const element = document.getElementById(elementId);
+    if (!element) return;
+    
+    // Create a temporary container for printing
+    const printContainer = document.createElement('div');
+    printContainer.className = 'print-only';
+    
+    // Add PrintHeader clone if it exists
+    const header = document.getElementById('print-header-content');
+    if (header) {
+      const headerClone = header.cloneNode(true) as HTMLElement;
+      headerClone.classList.remove('hidden');
+      headerClone.classList.add('block');
+      printContainer.appendChild(headerClone);
+    }
+    
+    // Clone the element instead of innerHTML to preserve more state/styles
+    const clone = element.cloneNode(true) as HTMLElement;
+    clone.id = `print-${elementId}`;
+    printContainer.appendChild(clone);
+    
+    // Add to body
+    document.body.appendChild(printContainer);
+    document.body.classList.add('is-printing');
+    
+    // Small delay to ensure browser has rendered the new element
+    setTimeout(() => {
+      window.print();
+      
+      // Cleanup
+      document.body.classList.remove('is-printing');
+      if (document.body.contains(printContainer)) {
+        document.body.removeChild(printContainer);
+      }
+    }, 250);
+  };
+
   const downloadAsPDF = async (elementId: string, fileName: string) => {
     const element = document.getElementById(elementId);
     if (!element) return;
 
     setIsGeneratingPDF(true);
     
-    // Save current scroll position
-    const scrollX = window.scrollX;
-    const scrollY = window.scrollY;
+    // Create a temporary wrapper for PDF generation to include header and ensure visibility
+    const wrapper = document.createElement('div');
+    wrapper.style.position = 'absolute';
+    wrapper.style.left = '-9999px';
+    wrapper.style.top = '0';
+    wrapper.style.width = '800px';
+    wrapper.style.backgroundColor = 'white';
+    wrapper.style.padding = '40px';
+    wrapper.style.color = 'black';
     
-    // Scroll to top to avoid html2canvas issues with scroll
-    window.scrollTo(0, 0);
+    // Add PrintHeader clone
+    const header = document.getElementById('print-header-content');
+    if (header) {
+      const headerClone = header.cloneNode(true) as HTMLElement;
+      headerClone.classList.remove('hidden');
+      headerClone.classList.add('block');
+      headerClone.style.display = 'block';
+      headerClone.style.marginBottom = '20px';
+      wrapper.appendChild(headerClone);
+    }
+    
+    // Add target element clone
+    const clone = element.cloneNode(true) as HTMLElement;
+    clone.style.display = 'block';
+    clone.style.width = '100%';
+    clone.style.height = 'auto';
+    clone.style.overflow = 'visible';
+    clone.style.transform = 'none';
+    
+    // Ensure all hidden elements for print are visible in the PDF
+    const hiddenElements = clone.querySelectorAll('.print-show-all');
+    hiddenElements.forEach(el => {
+      (el as HTMLElement).style.display = 'block';
+      (el as HTMLElement).style.height = 'auto';
+      (el as HTMLElement).style.opacity = '1';
+      (el as HTMLElement).style.visibility = 'visible';
+    });
+
+    // Remove elements that should be hidden in print
+    const toHide = clone.querySelectorAll('.print\\:hidden');
+    toHide.forEach(el => {
+      (el as HTMLElement).style.display = 'none';
+    });
+    
+    wrapper.appendChild(clone);
+    document.body.appendChild(wrapper);
 
     try {
-      const canvas = await html2canvas(element, {
-        scale: 2, // Higher scale for better quality
+      // Wait a bit for any layout shifts
+      await new Promise(resolve => setTimeout(resolve, 150));
+
+      const canvas = await html2canvas(wrapper, {
+        scale: 2,
         useCORS: true,
         logging: false,
         backgroundColor: '#ffffff',
-        windowWidth: element.scrollWidth,
-        windowHeight: element.scrollHeight,
-        onclone: (clonedDoc) => {
-          const clonedElement = clonedDoc.getElementById(elementId);
-          if (clonedElement) {
-            // Force styles that are normally in @media print
-            clonedElement.style.backgroundColor = 'white';
-            clonedElement.style.color = 'black';
-            clonedElement.style.padding = '20px';
-            clonedElement.style.width = '800px'; // Standard width for PDF
-            clonedElement.style.height = 'auto'; // Ensure all content is visible
-            clonedElement.style.overflow = 'visible'; // Ensure all content is visible
-            clonedElement.style.transform = 'none'; // Avoid motion transforms
-            
-            // Ensure all hidden elements for print are visible in the PDF
-            const hiddenElements = clonedElement.querySelectorAll('.print-show-all');
-            hiddenElements.forEach(el => {
-              (el as HTMLElement).style.display = 'block';
-              (el as HTMLElement).style.height = 'auto';
-              (el as HTMLElement).style.opacity = '1';
-              (el as HTMLElement).style.visibility = 'visible';
-            });
-
-            // Remove elements that should be hidden in print
-            const toHide = clonedElement.querySelectorAll('.print\\:hidden');
-            toHide.forEach(el => {
-              (el as HTMLElement).style.display = 'none';
-            });
-          }
-        }
       });
 
       const imgData = canvas.toDataURL('image/jpeg', 0.95);
@@ -172,39 +223,30 @@ export default function App() {
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
 
-      // If the content is longer than one page, we might need to handle multi-page
-      // but for now let's just scale it to fit or handle single page
-      pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
+      let heightLeft = pdfHeight;
+      let position = 0;
+      const pageHeight = pdf.internal.pageSize.getHeight();
+
+      pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, pdfHeight);
+      heightLeft -= pageHeight;
+
+      while (heightLeft >= 0) {
+        position = heightLeft - pdfHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, pdfHeight);
+        heightLeft -= pageHeight;
+      }
+
       pdf.save(`${fileName}.pdf`);
     } catch (error) {
       console.error('Failed to generate PDF:', error);
-      alert('Gagal membuat PDF. Silakan gunakan fitur Print browser (Ctrl+P) sebagai alternatif.');
+      alert('Gagal membuat PDF secara otomatis. Silakan gunakan fitur Print browser (Ctrl+P) lalu pilih "Save as PDF" sebagai alternatif.');
     } finally {
-      // Restore scroll position
-      window.scrollTo(scrollX, scrollY);
+      if (document.body.contains(wrapper)) {
+        document.body.removeChild(wrapper);
+      }
       setIsGeneratingPDF(false);
     }
-  };
-
-  const handlePrint = (elementId: string) => {
-    const element = document.getElementById(elementId);
-    if (!element) return;
-    
-    // Create a temporary container for printing
-    const printContainer = document.createElement('div');
-    printContainer.className = 'print-only';
-    printContainer.innerHTML = element.innerHTML;
-    
-    // Add to body
-    document.body.appendChild(printContainer);
-    document.body.classList.add('is-printing');
-    
-    // Trigger print
-    window.print();
-    
-    // Cleanup
-    document.body.classList.remove('is-printing');
-    document.body.removeChild(printContainer);
   };
 
   const needsWeeklyCheckIn = useMemo(() => {
@@ -448,6 +490,8 @@ export default function App() {
 
               <WeeklySchedule 
                 currentWeek={currentWeek} 
+                targetCalories={state.weeklyCheckIns[state.weeklyCheckIns.length - 1].targetCalories}
+                macros={state.weeklyCheckIns[state.weeklyCheckIns.length - 1].macros}
                 onDownloadPDF={() => downloadAsPDF('weekly-schedule-print', `Jadwal-Santuy-Minggu-${currentWeek}`)}
                 onPrint={() => handlePrint('weekly-schedule-print')}
                 isGenerating={isGeneratingPDF}
@@ -525,16 +569,16 @@ export default function App() {
   );
 }
 
-function WeeklySchedule({ currentWeek, onDownloadPDF, onPrint, isGenerating }: { currentWeek: number, onDownloadPDF?: () => void, onPrint?: () => void, isGenerating?: boolean }) {
+function WeeklySchedule({ currentWeek, targetCalories, macros, onDownloadPDF, onPrint, isGenerating }: { currentWeek: number, targetCalories: number, macros?: { protein: number, fat: number, carbs: number }, onDownloadPDF?: () => void, onPrint?: () => void, isGenerating?: boolean }) {
   const days = [1, 2, 3, 4, 5, 6, 7];
   const cycleIndex = Math.floor((currentWeek - 1) / 2);
   
   const proteinCycles = [
-    ['Ayam', 'Ikan'], // Cycle 0 (Weeks 1-2)
-    ['Daging Sapi (Tanpa Lemak)', 'Tahu & Tempe'], // Cycle 1 (Weeks 3-4)
-    ['Udang / Cumi', 'Kacang Hijau / Edamame'], // Cycle 2 (Weeks 5-6)
-    ['Dada Bebek (Tanpa Kulit)', 'Jamur & Tahu Sutra'], // Cycle 3 (Weeks 7-8)
-    ['Ayam Kampung', 'Kacang Merah / Tempe Mendoan (Panggang)'], // Cycle 4 (Weeks 9-10)
+    ['Ayam', 'Ikan'],
+    ['Daging Sapi (Tanpa Lemak)', 'Tahu & Tempe'],
+    ['Udang / Cumi', 'Kacang Hijau / Edamame'],
+    ['Dada Bebek (Tanpa Kulit)', 'Jamur & Tahu Sutra'],
+    ['Ayam Kampung', 'Kacang Merah / Tempe Mendoan (Panggang)'],
   ];
   const currentProteinPair = proteinCycles[cycleIndex % proteinCycles.length];
   
@@ -549,7 +593,6 @@ function WeeklySchedule({ currentWeek, onDownloadPDF, onPrint, isGenerating }: {
     'Selada Romaine (Panggang)'
   ];
 
-  // Variasi Snack berdasarkan cycle
   const snack1Options = ['Pepaya / Semangka / Melon', 'Pir / Jeruk / Belimbing', 'Nanas / Naga / Jambu'];
   const snack2Options = ['1 Apel', '1 Pisang', '1 Pir'];
   const snack3Options = ['1 Jagung Rebus', '1 Ubi Rebus', '1 Kentang Rebus'];
@@ -558,7 +601,6 @@ function WeeklySchedule({ currentWeek, onDownloadPDF, onPrint, isGenerating }: {
   const currentSnack2 = snack2Options[cycleIndex % snack2Options.length];
   const currentSnack3 = snack3Options[cycleIndex % snack3Options.length];
 
-  // Pergeseran waktu makan setiap 2 minggu (Cycle)
   const timeOffsets = [0, 30, -30, 60, -60];
   const offset = timeOffsets[cycleIndex % timeOffsets.length];
   
@@ -567,6 +609,61 @@ function WeeklySchedule({ currentWeek, onDownloadPDF, onPrint, isGenerating }: {
     const date = new Date();
     date.setHours(h, m + offsetMinutes, 0);
     return date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false });
+  };
+
+  // Nutritional values per 100g (FatSecret Indonesia)
+  const nutritionData: Record<string, { p: number, f: number, c: number, kcal: number }> = {
+    'Ayam': { p: 31, f: 3.6, c: 0, kcal: 165 },
+    'Ikan': { p: 26, f: 3, c: 0, kcal: 128 },
+    'Daging Sapi (Tanpa Lemak)': { p: 26, f: 15, c: 0, kcal: 250 },
+    'Tahu & Tempe': { p: 13, f: 8, c: 5, kcal: 140 },
+    'Udang / Cumi': { p: 20, f: 1.5, c: 0, kcal: 95 },
+    'Kacang Hijau / Edamame': { p: 11, f: 5, c: 10, kcal: 120 },
+    'Dada Bebek (Tanpa Kulit)': { p: 24, f: 10, c: 0, kcal: 190 },
+    'Jamur & Tahu Sutra': { p: 5, f: 3, c: 2, kcal: 50 },
+    'Ayam Kampung': { p: 25, f: 10, c: 0, kcal: 190 },
+    'Kacang Merah / Tempe Mendoan (Panggang)': { p: 15, f: 8, c: 15, kcal: 180 },
+    'Nasi': { p: 2.7, f: 0.3, c: 27.9, kcal: 129 },
+    'Telur': { p: 12.6, f: 10.6, c: 1.2, kcal: 155 },
+    'Snack1': { p: 0.5, f: 0.3, c: 11, kcal: 43 },
+    'Snack2': { p: 0.3, f: 0.2, c: 14, kcal: 52 },
+    'Snack3': { p: 3.4, f: 1.5, c: 21, kcal: 96 },
+    'Sayur': { p: 1.5, f: 0.2, c: 3, kcal: 20 },
+  };
+
+  const getPortions = (day: number) => {
+    const dayOfProgram = (currentWeek - 1) * 7 + day;
+    const isFirstProteinDay = (dayOfProgram + cycleIndex) % 2 !== 0;
+    const protein = isFirstProteinDay ? currentProteinPair[0] : currentProteinPair[1];
+    const proteinStats = nutritionData[protein] || nutritionData['Ayam'];
+    const nasiStats = nutritionData['Nasi'];
+
+    const targetP = macros?.protein || 60;
+    const targetC = macros?.carbs || 100;
+
+    const essentialCarbs = (nutritionData['Telur'].c) + (nutritionData['Sayur'].c * 2);
+    const remainingCarbs = Math.max(0, targetC - essentialCarbs);
+    const carbsForNasi = remainingCarbs * 0.6;
+    const carbsForSnacks = remainingCarbs * 0.4;
+
+    const totalNasiWeight = (carbsForNasi / nasiStats.c) * 100;
+    const finalNasiWeight = Math.min(250, Math.max(50, Math.round(totalNasiWeight / 2)));
+
+    const s1Weight = Math.min(250, Math.max(50, Math.round((carbsForSnacks * 0.4 / nutritionData['Snack1'].c) * 100)));
+    const s2Weight = Math.min(150, Math.max(50, Math.round((carbsForSnacks * 0.3 / nutritionData['Snack2'].c) * 100)));
+    const s3Weight = Math.min(150, Math.max(50, Math.round((carbsForSnacks * 0.3 / nutritionData['Snack3'].c) * 100)));
+
+    const essentialProtein = (nutritionData['Telur'].p) + (nutritionData['Sayur'].p * 2);
+    const remainingProtein = Math.max(0, targetP - essentialProtein);
+    const finalProteinWeight = Math.min(250, Math.max(100, Math.round((remainingProtein / 2 / proteinStats.p) * 100)));
+
+    return {
+      nasi: finalNasiWeight,
+      protein: finalProteinWeight,
+      s1: s1Weight,
+      s2: s2Weight,
+      s3: s3Weight
+    };
   };
 
   const [expandedDay, setExpandedDay] = useState<number | null>(null);
@@ -604,6 +701,7 @@ function WeeklySchedule({ currentWeek, onDownloadPDF, onPrint, isGenerating }: {
           const method = cookingMethods[(dayOfProgram - 1 + cycleIndex) % cookingMethods.length];
           const veggie = vegetables[(dayOfProgram - 1 + cycleIndex) % vegetables.length];
           const isExpanded = expandedDay === d;
+          const portions = getPortions(d);
 
           return (
             <div key={d} className="border border-brand-primary/10 rounded-xl overflow-hidden print-no-break">
@@ -626,31 +724,31 @@ function WeeklySchedule({ currentWeek, onDownloadPDF, onPrint, isGenerating }: {
                 <div className="p-3 space-y-2 text-xs">
                   <div className="flex justify-between border-b border-brand-primary/5 pb-1">
                     <span className="font-semibold opacity-70">{shiftTime('06:30', offset)} - Sarapan</span>
-                    <span>2 Telur Rebus</span>
+                    <span>2 Telur Rebus (100g)</span>
                   </div>
                   <div className="flex justify-between border-b border-brand-primary/5 pb-1">
                     <span className="font-semibold opacity-70">{shiftTime('08:00', offset)} - Snack 1</span>
-                    <span>{currentSnack1} (250g)</span>
+                    <span>{currentSnack1} ({portions.s1}g)</span>
                   </div>
                   <div className="flex justify-between border-b border-brand-primary/5 pb-1">
                     <span className="font-semibold opacity-70">{shiftTime('11:00', offset)} - Makan Siang</span>
-                    <span className="text-right font-medium text-brand-primary">Nasi + {mainProtein} {method} + {veggie}</span>
+                    <span className="text-right font-medium text-brand-primary">Nasi ({portions.nasi}g) + {mainProtein} ({portions.protein}g) + {veggie} (100g)</span>
                   </div>
                   <div className="flex justify-between border-b border-brand-primary/5 pb-1">
                     <span className="font-semibold opacity-70">{shiftTime('14:00', offset)} - Snack 2</span>
-                    <span>{currentSnack2}</span>
+                    <span>{currentSnack2} ({portions.s2}g)</span>
                   </div>
                   <div className="flex justify-between border-b border-brand-primary/5 pb-1">
                     <span className="font-semibold opacity-70">{shiftTime('17:00', offset)} - Makan Malam</span>
                     {d === 7 ? (
                       <span className="text-right font-bold text-orange-500">Makan Bebas (Cheat Meal)</span>
                     ) : (
-                      <span className="text-right font-medium text-brand-primary">Nasi + {mainProtein} {method} + {veggie}</span>
+                      <span className="text-right font-medium text-brand-primary">Nasi ({portions.nasi}g) + {mainProtein} ({portions.protein}g) + {veggie} (100g)</span>
                     )}
                   </div>
                   <div className="flex justify-between">
                     <span className="font-semibold opacity-70">{shiftTime('20:00', offset)} - Snack 3</span>
-                    <span>{currentSnack3}</span>
+                    <span>{currentSnack3} ({portions.s3}g)</span>
                   </div>
                 </div>
               </div>
@@ -1646,7 +1744,7 @@ function WeeklyCheckInView({ weekNumber, onSubmit }: { weekNumber: number, onSub
 
 function PrintHeader({ week, day, phase }: { week: number, day: number, phase: Phase }) {
   return (
-    <div className="hidden print:block mb-8 border-b-2 border-brand-primary pb-4">
+    <div id="print-header-content" className="hidden print:block mb-8 border-b-2 border-brand-primary pb-4">
       <h1 className="text-4xl font-serif font-bold text-brand-primary">Sehat Santuy Selalu</h1>
       <div className="flex justify-between items-end mt-2">
         <div>
